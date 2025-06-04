@@ -1,0 +1,5 @@
+gradio
+opencv-python
+torch --index-url https://download.pytorch.org/whl/rocm6.3
+torchvision --index-url https://download.pytorch.org/whl/rocm6.3
+torchaudio --index-url https://download.pytorch.org/whl/rocm6.3

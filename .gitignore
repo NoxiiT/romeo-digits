@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+
+# Environnements virtuels
+.env/
+.venv/
+env/
+venv/
+
+# Fichiers temporaires
+*.tmp
+*.log
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Données et modèles
+*.pth
+*.pt
+*.h5
+data/
+
+# Gradio
+gradio_cached_examples/
+.gradio/
+
+# VSCode
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Fichiers secrets
+*.env
