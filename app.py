@@ -32,35 +32,57 @@ def load_dataloaders(dataset_name, batch_size, train_pct=0.8, val_pct=0.1):
     return fn(batch_size, train_pct, val_pct)
 
 # Méthode pour instancier ou appeler le modèle dynamiquement
-def train_model(dataset_name, model_name, epochs, lr, batch_size, train_pct, val_pct, progress=gr.Progress()):
-    """
-    Nouvelle signature : on reçoit train_pct et val_pct.
-    Pour l'instant, on continue de charger le dataset complet. 
-    L'utilisation effective de train_pct/val_pct sera implémentée dans la prochaine itération.
-    """
+def train_model(dataset_name, model_name, epochs, lr, batch_size, train_pct, val_pct):
     global MODEL, CLASSES, CURRENT_DATASET
     CURRENT_DATASET = dataset_name
 
-    # Charger les DataLoaders (train, val, test)
     train_loader, val_loader, test_loader, num_classes = load_dataloaders(dataset_name, batch_size, train_pct, val_pct)
-
-    # Charger la classe ou la fonction depuis MODELS
     cfg = MODELS[model_name]
     module = importlib.import_module(cfg["module"])
     if "class" in cfg:
-        # On entraîne un modèle défini en local
         ModelClass = getattr(module, cfg["class"])
         MODEL = ModelClass(num_classes=num_classes)
 
-        # Détermine la fonction d'entraînement selon la classe
+        losses = []
+        accs = []
+
         if model_name == "SimpleCNN":
             from models.simple_cnn import train_simplecnn
-            # Passe val_loader si besoin (à adapter dans train_simplecnn)
-            losses, accs = train_simplecnn(MODEL, train_loader, lr, epochs, DEVICE, progress)
+            train_fn = train_simplecnn
         else:
             from models.cifar_cnn import train_cifarcnn
-            # Passe val_loader si besoin (à adapter dans train_cifarcnn)
-            losses, accs = train_cifarcnn(MODEL, train_loader, lr, epochs, DEVICE, progress)
+            train_fn = train_cifarcnn
+
+        for epoch, (loss, acc) in enumerate(train_fn(
+            MODEL, train_loader, lr, epochs, DEVICE, stream=True
+        )):
+            losses.append(loss)
+            accs.append(acc)
+            df = pd.DataFrame([
+                {"epoch": i + 1, "loss": losses[i], "accuracy": accs[i]}
+                for i in range(len(losses))
+            ])
+            # Barre de progression HTML avec le style pip en monospace
+            bar_len = 20
+            done = int(bar_len * (epoch + 1) / epochs)
+            remaining = bar_len - done - 1  # on réserve un caractère pour le marqueur "╸"
+
+            filled = "━" * done
+            marker = "╸"
+            rest   = "━" * remaining  if remaining > 0 else ""
+            
+            colored = f'<span style="color:#f97316; font-family:monospace;">{filled}{marker}</span>'
+            uncolored = f'<span style="color:#777; font-family:monospace;">{rest}</span>'
+            bar_html = f'<span style="font-family:monospace;">{colored}{uncolored} {epoch+1}/{epochs}</span>'
+            result_str = (
+                f"{bar_html}<br>"
+                f"Entraînement en cours : epoch {epoch+1}/{epochs}<br>"
+                f"(train_pct={train_pct*100:.0f}%, val_pct={val_pct*100:.0f}%)<br>"
+                f"Perte : {loss:.4f} | Précision : {acc*100:.2f}%<br>"
+                f"Nombre de classes : {num_classes} | Modèle : {model_name} | Device : {DEVICE}"
+            )
+            #  ━━━━━━━━━━━━━━━━━━━━━━━╸━━━━━━━━━━━━━━━━
+            yield result_str, df, df
 
         CLASSES = (
             [str(i) for i in range(num_classes)]
@@ -71,21 +93,20 @@ def train_model(dataset_name, model_name, epochs, lr, batch_size, train_pct, val
             ]
         )
 
-        # Retour : texte + DataFrame pour LinePlot
         result_str = (
-            f"Entraînement terminé sur {dataset_name} avec {epochs} epochs\n"
-            f" (train_pct={train_pct*100:.0f}%, val_pct={val_pct*100:.0f}%)"
+            f"Entraînement terminé sur {dataset_name} avec {epochs} epochs<br>"
+            f"(train_pct={train_pct*100:.0f}%, val_pct={val_pct*100:.0f}%)<br>"
+            f"Perte finale : {losses[-1]:.4f} | Précision finale : {accs[-1]*100:.2f}%<br>"
+            f"Nombre de classes : {num_classes} | Modèle : {model_name} | Device : {DEVICE}"
         )
         df = pd.DataFrame([
             {"epoch": i + 1, "loss": losses[i], "accuracy": accs[i]}
             for i in range(len(losses))
         ])
-        print("=== DEBUG train_model: DataFrame ===")
-        print(df.head(), "\n(n_rows=", len(df), ")")
-        return result_str, df, df
+        yield result_str, df, df
 
     else:
-        return "Impossible d'entraîner un modèle pré-entraîné.", None
+        yield "Impossible d'entraîner un modèle pré-entraîné.", None, None
 
 def predict(image):
     global MODEL, CLASSES, CURRENT_DATASET
@@ -167,10 +188,9 @@ with gr.Blocks() as demo:
             train_pct = gr.Slider(0.1, 0.9, value=0.8, step=0.05, label="Proportion train (%)", interactive=True)
             val_pct   = gr.Slider(0.0, 0.5, value=0.1, step=0.05, label="Proportion validation (%)", interactive=True)
 
-        train_output = gr.Textbox(
+        train_output = gr.HTML(
             label="Résultat de l'entraînement",
-            interactive=False,
-            lines=3
+            min_height=100,
         )
         with gr.Row():
             train_plot = gr.LinePlot(
@@ -225,9 +245,9 @@ with gr.Blocks() as demo:
         )
         with gr.Row():
             img_pre     = gr.Image(
-                sources=["upload", "webcam"], 
+                sources=["upload", "webcam", "clipboard"], 
                 type="pil", 
-                label="Image ou webcam"
+                label="Image d'entrée"
             )
             conf_slider = gr.Slider(
                 0.01, 1.0, value=0.25, step=0.01,
@@ -252,10 +272,11 @@ with gr.Blocks() as demo:
             fn=lambda m: (
                 gr.update(visible=(m == "YOLOv11")),
                 gr.update(visible=(m == "YOLOv11")),
-                gr.update(visible=(m == "YOLOv11"))
+                gr.update(visible=(m == "YOLOv11")),
+                gr.update(visible=(m != "YOLOv11"))
             ),
             inputs=existing_models,
-            outputs=[conf_slider, iou_slider, yolov11_img]
+            outputs=[conf_slider, iou_slider, yolov11_img, classif_output]
         )
 
         classify_btn.click(

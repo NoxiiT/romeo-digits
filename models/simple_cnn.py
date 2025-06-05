@@ -26,7 +26,7 @@ class SimpleCNN(nn.Module):
         return x
 
 # Fonction d'entraînement simple (utilisée par app.py)
-def train_simplecnn(model, train_loader, lr, epochs, device, progress):
+def train_simplecnn(model, train_loader, lr, epochs, device, progress=None, on_epoch=None, stream=False):
     model.to(device)
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=lr)
@@ -49,5 +49,11 @@ def train_simplecnn(model, train_loader, lr, epochs, device, progress):
         epoch_acc  = correct / total
         losses.append(epoch_loss)
         accs.append(epoch_acc)
-        progress((epoch+1)/epochs, desc=f"Epoch {epoch+1}/{epochs}")
-    return losses, accs
+        if progress is not None:
+            progress((epoch+1)/epochs, desc=f"Epoch {epoch+1}/{epochs}")
+        if on_epoch is not None:
+            on_epoch(epoch, epoch_loss, epoch_acc)
+        if stream:
+            yield epoch_loss, epoch_acc
+    if not stream:
+        return losses, accs
