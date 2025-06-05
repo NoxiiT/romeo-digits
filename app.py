@@ -4,6 +4,15 @@ import pandas as pd
 from config import dATA_LOADERS, MODELS
 from PIL import Image
 import torch
+import tempfile
+import cv2
+import numpy as np
+import warnings
+import logging
+
+# Suppress NNPACK warnings from PyTorch
+warnings.filterwarnings("ignore", message="Could not initialize NNPACK")
+logging.getLogger("torch").setLevel(logging.ERROR)
 
 # Détection du device
 if torch.cuda.is_available():
@@ -49,12 +58,14 @@ def train_model(dataset_name, model_name, epochs, lr, batch_size, train_pct, val
         if model_name == "SimpleCNN":
             from models.simple_cnn import train_simplecnn
             train_fn = train_simplecnn
+            train_args = dict(stream=True)
         else:
             from models.cifar_cnn import train_cifarcnn
             train_fn = train_cifarcnn
+            train_args = dict(stream=True)
 
         for epoch, (loss, acc) in enumerate(train_fn(
-            MODEL, train_loader, lr, epochs, DEVICE, stream=True
+            MODEL, train_loader, lr, epochs, DEVICE, **train_args
         )):
             losses.append(loss)
             accs.append(acc)
@@ -149,6 +160,48 @@ def classify_pretrained(model_name, image, conf=0.25, iou=0.45):
     else:
         return fn(image), None
 
+def stream_yolov11(video):
+    """
+    Prend un flux vidéo (mp4) depuis la webcam, applique YOLOv11 sur chaque frame,
+    et yield la vidéo annotée (mp4) en streaming.
+    """
+    from config import MODELS
+    cfg = MODELS["YOLOv11"]
+    module = importlib.import_module(cfg["module"])
+    fn = getattr(module, cfg["function"])
+
+    # Ouvre la vidéo d'entrée
+    cap = cv2.VideoCapture(video)
+    fps = cap.get(cv2.CAP_PROP_FPS) or 24
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+    # Temp file pour la vidéo annotée
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmpfile:
+        out = cv2.VideoWriter(tmpfile.name, fourcc, fps, (width, height))
+        frames = []
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            # Convertir BGR->RGB puis PIL.Image
+            img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+            # Appliquer YOLOv11 (doit retourner une image annotée PIL.Image)
+            annotated = fn(img, 0.25, 0.45)
+            # Convertir PIL.Image -> BGR np.array
+            annotated_np = cv2.cvtColor(np.array(annotated), cv2.COLOR_RGB2BGR)
+            out.write(annotated_np)
+            frames.append(annotated_np)
+            # Pour le streaming, yield la vidéo temporaire toutes les N frames
+            if len(frames) % int(fps) == 0:
+                out.release()
+                yield tmpfile.name
+                out = cv2.VideoWriter(tmpfile.name, fourcc, fps, (width, height))
+        out.release()
+        yield tmpfile.name
+    cap.release()
+
 def update_model_dropdown(selected_dataset):
     """
     Si l'utilisateur choisit CIFAR-10, on ne propose que CIFARCNN.
@@ -158,6 +211,15 @@ def update_model_dropdown(selected_dataset):
         return gr.update(choices=["CIFARCNN"], value="CIFARCNN")
     else:
         return gr.update(choices=["SimpleCNN"], value="SimpleCNN")
+
+def yolov11_on_frame(frame, conf=0.25, iou=0.45):
+    """
+    Applique YOLOv11 sur une image PIL (frame webcam).
+    """
+    cfg = MODELS["YOLOv11"]
+    module = importlib.import_module(cfg["module"])
+    fn = getattr(module, cfg["function"])
+    return fn(frame, conf, iou)
 
 # --- Construction de l'interface Gradio --- #
 with gr.Blocks() as demo:
@@ -244,10 +306,17 @@ with gr.Blocks() as demo:
             outputs=model_header
         )
         with gr.Row():
-            img_pre     = gr.Image(
+            img_pre = gr.Image(
                 sources=["upload", "webcam", "clipboard"], 
                 type="pil", 
-                label="Image d'entrée"
+                label="Image d'entrée",
+                visible=True
+            )
+            webcam_stream = gr.Image(
+                sources="webcam",
+                type="pil",
+                label="Webcam YOLOv11",
+                visible=False
             )
             conf_slider = gr.Slider(
                 0.01, 1.0, value=0.25, step=0.01,
@@ -257,32 +326,59 @@ with gr.Blocks() as demo:
                 0.01, 1.0, value=0.45, step=0.01,
                 label="IoU (YOLOv11)", visible=False
             )
+            output_img = gr.Image(
+                label="Image annotée YOLOv11",
+                visible=False
+            )
         classify_btn   = gr.Button("Classifier")
         classif_output = gr.Textbox(
             label="Résultats texte",
             lines=5,
             interactive=False
         )
-        yolov11_img = gr.Image(
-            label="Image annotée YOLOv11",
-            visible=False
-        )
+
+        def toggle_inputs(model):
+            # Affiche la webcam et l'image annotée seulement pour YOLOv11
+            return (
+                gr.update(visible=(model != "YOLOv11")),  # img_pre
+                gr.update(visible=(model == "YOLOv11")),  # webcam_stream
+                gr.update(visible=(model == "YOLOv11")),  # conf_slider
+                gr.update(visible=(model == "YOLOv11")),  # iou_slider
+                gr.update(visible=(model == "YOLOv11")),  # output_img
+                gr.update(visible=(model != "YOLOv11"))   # classif_output
+            )
 
         existing_models.change(
-            fn=lambda m: (
-                gr.update(visible=(m == "YOLOv11")),
-                gr.update(visible=(m == "YOLOv11")),
-                gr.update(visible=(m == "YOLOv11")),
-                gr.update(visible=(m != "YOLOv11"))
-            ),
+            fn=toggle_inputs,
             inputs=existing_models,
-            outputs=[conf_slider, iou_slider, yolov11_img, classif_output]
+            outputs=[img_pre, webcam_stream, conf_slider, iou_slider, output_img, classif_output]
         )
 
+        # Pour YOLOv11 webcam : streaming direct frame->frame
+        webcam_stream.stream(
+            lambda frame, conf, iou: yolov11_on_frame(frame, conf, iou),
+            inputs=[webcam_stream, conf_slider, iou_slider],
+            outputs=output_img,
+            time_limit=15,
+            stream_every=0.1,
+            concurrency_limit=30
+        )
+
+        # Pour les autres modèles ou image YOLOv11 (upload)
+        def classify_pretrained_or_image(model, image, conf, iou):
+            if model == "YOLOv11" and image is not None:
+                _, img = classify_pretrained(model, image, conf, iou)
+                return img, None
+            elif model != "YOLOv11":
+                txt, _ = classify_pretrained(model, image)
+                return None, txt
+            else:
+                return None, None
+
         classify_btn.click(
-            fn=lambda m, i, c, io: classify_pretrained(m, i, c, io),
+            fn=classify_pretrained_or_image,
             inputs=[existing_models, img_pre, conf_slider, iou_slider],
-            outputs=[classif_output, yolov11_img]
+            outputs=[output_img, classif_output]
         )
 
 

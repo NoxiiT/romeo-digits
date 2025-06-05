@@ -29,7 +29,7 @@ class CIFARCNN(nn.Module):
         return x
 
 # Fonction d'entraînement similaire à celle de simple_cnn
-def train_cifarcnn(model, train_loader, lr, epochs, device, progress=None, on_epoch=None):
+def train_cifarcnn(model, train_loader, lr, epochs, device, progress=None, on_epoch=None, stream=False):
     model.to(device)
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=lr)
@@ -56,4 +56,7 @@ def train_cifarcnn(model, train_loader, lr, epochs, device, progress=None, on_ep
             progress((epoch+1)/epochs, desc=f"Epoch {epoch+1}/{epochs}")
         if on_epoch is not None:
             on_epoch(epoch, epoch_loss, epoch_acc)
-    return losses, accs
+        if stream:
+            yield epoch_loss, epoch_acc
+    if not stream:
+        return losses, accs
