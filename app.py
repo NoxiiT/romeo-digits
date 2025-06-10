@@ -34,90 +34,125 @@ empty_df = pd.DataFrame({
 })
 
 # Méthode pour charger DataLoader dynamiquement
-def load_dataloaders(dataset_name, batch_size, train_pct=0.8, val_pct=0.1):
+def load_dataloaders(dataset_name, batch_size, train_pct=0.8, val_pct=0.1, num_workers=0):
     cfg = dATA_LOADERS[dataset_name]
     module = importlib.import_module(cfg["module"])
     fn = getattr(module, cfg["function"])
-    return fn(batch_size, train_pct, val_pct)
+    return fn(batch_size, train_pct, val_pct, num_workers=num_workers)
 
 # Méthode pour instancier ou appeler le modèle dynamiquement
-def train_model(dataset_name, model_name, epochs, lr, batch_size, train_pct, val_pct):
+def train_model(
+    dataset_name, model_name, epochs, lr, batch_size, train_pct, val_pct, num_workers,
+    num_conv, conv1_filters, conv2_filters, conv3_filters, conv4_filters, conv5_filters,
+    num_dense, dense1_units, dense2_units, dense3_units
+):
     global MODEL, CLASSES, CURRENT_DATASET
     CURRENT_DATASET = dataset_name
 
-    train_loader, val_loader, test_loader, num_classes = load_dataloaders(dataset_name, batch_size, train_pct, val_pct)
+    # Sécuriser les valeurs None
+    num_conv = num_conv if num_conv is not None else 1
+    num_dense = num_dense if num_dense is not None else 1
+    conv1_filters = conv1_filters if conv1_filters is not None else 32
+    conv2_filters = conv2_filters if conv2_filters is not None else 64
+    conv3_filters = conv3_filters if conv3_filters is not None else 128
+    conv4_filters = conv4_filters if conv4_filters is not None else 128
+    conv5_filters = conv5_filters if conv5_filters is not None else 128
+    dense1_units = dense1_units if dense1_units is not None else 128
+    dense2_units = dense2_units if dense2_units is not None else 64
+    dense3_units = dense3_units if dense3_units is not None else 32
+
+    # 1️⃣ Charger les DataLoaders
+    train_loader, val_loader, test_loader, num_classes = load_dataloaders(
+        dataset_name, batch_size, train_pct, val_pct, num_workers
+    )
+
+    # 2️⃣ Charger la classe du modèle
     cfg = MODELS[model_name]
     module = importlib.import_module(cfg["module"])
-    if "class" in cfg:
-        ModelClass = getattr(module, cfg["class"])
-        MODEL = ModelClass(num_classes=num_classes)
+    ModelClass = getattr(module, cfg["class"])
 
-        losses = []
-        accs = []
+    # 3️⃣ Construire dynamiquement conv_layers
+    conv_filters = []
+    if num_conv >= 1: conv_filters.append(conv1_filters)
+    if num_conv >= 2: conv_filters.append(conv2_filters)
+    if num_conv >= 3: conv_filters.append(conv3_filters)
+    if num_conv >= 4: conv_filters.append(conv4_filters)
+    if num_conv >= 5: conv_filters.append(conv5_filters)
+    conv_layers = [{"out_channels": f, "kernel_size": 3} for f in conv_filters]
 
-        if model_name == "SimpleCNN":
-            from models.simple_cnn import train_simplecnn
-            train_fn = train_simplecnn
-            train_args = dict(stream=True)
-        else:
-            from models.cifar_cnn import train_cifarcnn
-            train_fn = train_cifarcnn
-            train_args = dict(stream=True)
+    # 4️⃣ Construire dynamiquement dense_layers
+    dense_units = []
+    if num_dense >= 1: dense_units.append(dense1_units)
+    if num_dense >= 2: dense_units.append(dense2_units)
+    if num_dense >= 3: dense_units.append(dense3_units)
+    dense_layers = dense_units
 
-        for epoch, (loss, acc) in enumerate(train_fn(
-            MODEL, train_loader, lr, epochs, DEVICE, **train_args
-        )):
-            losses.append(loss)
-            accs.append(acc)
-            df = pd.DataFrame([
-                {"epoch": i + 1, "loss": losses[i], "accuracy": accs[i]}
-                for i in range(len(losses))
-            ])
-            # Barre de progression HTML avec le style pip en monospace
-            bar_len = 20
-            done = int(bar_len * (epoch + 1) / epochs)
-            remaining = bar_len - done - 1  # on réserve un caractère pour le marqueur "╸"
+    # 5️⃣ Instancier le modèle avec la config
+    MODEL = ModelClass(
+        num_classes=num_classes,
+        conv_layers=conv_layers,
+        dense_layers=dense_layers
+    )
+    CLASSES = (
+        [str(i) for i in range(num_classes)]
+        if dataset_name != "CIFAR-10"
+        else [
+            "airplane", "automobile", "bird", "cat", "deer",
+            "dog", "frog", "horse", "ship", "truck"
+        ]
+    )
 
-            filled = "━" * done
-            marker = "╸"
-            rest   = "━" * remaining  if remaining > 0 else ""
-            
-            colored = f'<span style="color:#f97316; font-family:monospace;">{filled}{marker}</span>'
-            uncolored = f'<span style="color:#777; font-family:monospace;">{rest}</span>'
-            bar_html = f'<span style="font-family:monospace;">{colored}{uncolored} {epoch+1}/{epochs}</span>'
-            result_str = (
-                f"{bar_html}<br>"
-                f"Entraînement en cours : epoch {epoch+1}/{epochs}<br>"
-                f"(train_pct={train_pct*100:.0f}%, val_pct={val_pct*100:.0f}%)<br>"
-                f"Perte : {loss:.4f} | Précision : {acc*100:.2f}%<br>"
-                f"Nombre de classes : {num_classes} | Modèle : {model_name} | Device : {DEVICE}"
-            )
-            #  ━━━━━━━━━━━━━━━━━━━━━━━╸━━━━━━━━━━━━━━━━
-            yield result_str, df, df
+    # 6️⃣ Choisir la fonction d’entraînement
+    if model_name == "SimpleCNN":
+        from models.simple_cnn import train_simplecnn as train_fn
+    else:
+        from models.cifar_cnn import train_cifarcnn as train_fn
 
-        CLASSES = (
-            [str(i) for i in range(num_classes)]
-            if dataset_name != "CIFAR-10"
-            else [
-                "airplane", "automobile", "bird", "cat", "deer",
-                "dog", "frog", "horse", "ship", "truck"
-            ]
-        )
+    losses = []
+    accs = []
 
-        result_str = (
-            f"Entraînement terminé sur {dataset_name} avec {epochs} epochs<br>"
-            f"(train_pct={train_pct*100:.0f}%, val_pct={val_pct*100:.0f}%)<br>"
-            f"Perte finale : {losses[-1]:.4f} | Précision finale : {accs[-1]*100:.2f}%<br>"
-            f"Nombre de classes : {num_classes} | Modèle : {model_name} | Device : {DEVICE}"
-        )
+    # 7️⃣ Boucle streaming
+    for epoch, (loss, acc) in enumerate(train_fn(
+        MODEL, train_loader, lr, epochs, DEVICE, stream=True
+    )):
+        losses.append(loss)
+        accs.append(acc)
+
+        # DataFrame progressif
         df = pd.DataFrame([
-            {"epoch": i + 1, "loss": losses[i], "accuracy": accs[i]}
+            {"epoch": i+1, "loss": losses[i], "accuracy": accs[i]}
             for i in range(len(losses))
         ])
+
+        # Barre pip-style en monospace + couleur
+        bar_len   = 20
+        done      = int(bar_len * (epoch+1)/epochs)
+        remaining = bar_len - done - 1
+        filled    = "━"*done
+        marker    = "╸"
+        rest      = "━"*remaining if remaining>0 else ""
+        colored   = f'<span style="color:#f97316; font-family:monospace;">{filled}{marker}</span>'
+        uncolored = f'<span style="color:#777; font-family:monospace;">{rest}</span>'
+        bar_html  = f'<span style="font-family:monospace;">[{colored}{uncolored}] {epoch+1}/{epochs}</span>'
+
+        result_str = (
+            f"{bar_html}<br>"
+            f"Epoch {epoch+1}/{epochs} — "
+            f"(train {train_pct*100:.0f}%, val {val_pct*100:.0f}%)<br>"
+            f"Loss : {loss:.4f} | Acc : {acc*100:.2f}%"
+        )
         yield result_str, df, df
 
-    else:
-        yield "Impossible d'entraîner un modèle pré-entraîné.", None, None
+    # 8️⃣ Message final + courbe complète
+    final_str = (
+        f"✔️ Entraînement terminé sur {dataset_name} en {epochs} epochs<br>"
+        f"Loss finale : {losses[-1]:.4f} | Acc finale : {accs[-1]*100:.2f}%"
+    )
+    df = pd.DataFrame([
+        {"epoch": i+1, "loss": losses[i], "accuracy": accs[i]}
+        for i in range(len(losses))
+    ])
+    yield final_str, df, df
 
 def predict(image):
     global MODEL, CLASSES, CURRENT_DATASET
@@ -221,6 +256,77 @@ def yolov11_on_frame(frame, conf=0.25, iou=0.45):
     fn = getattr(module, cfg["function"])
     return fn(frame, conf, iou)
 
+def plot_model(
+    model_name, num_conv, conv1_filters, conv2_filters, conv3_filters, conv4_filters, conv5_filters,
+    num_dense, dense1_units, dense2_units, dense3_units
+):
+    import tempfile
+    from torchviz import make_dot
+    import PIL.Image
+
+    # Sécuriser les valeurs None
+    num_conv = num_conv if num_conv is not None else 1
+    num_dense = num_dense if num_dense is not None else 1
+    conv1_filters = conv1_filters if conv1_filters is not None else 32
+    conv2_filters = conv2_filters if conv2_filters is not None else 64
+    conv3_filters = conv3_filters if conv3_filters is not None else 128
+    conv4_filters = conv4_filters if conv4_filters is not None else 128
+    conv5_filters = conv5_filters if conv5_filters is not None else 128
+    dense1_units = dense1_units if dense1_units is not None else 128
+    dense2_units = dense2_units if dense2_units is not None else 64
+    dense3_units = dense3_units if dense3_units is not None else 32
+
+    # Construire la config du modèle
+    conv_filters = []
+    if num_conv >= 1: conv_filters.append(conv1_filters)
+    if num_conv >= 2: conv_filters.append(conv2_filters)
+    if num_conv >= 3: conv_filters.append(conv3_filters)
+    if num_conv >= 4: conv_filters.append(conv4_filters)
+    if num_conv >= 5: conv_filters.append(conv5_filters)
+    conv_layers = [{"out_channels": f, "kernel_size": 3} for f in conv_filters]
+
+    dense_units = []
+    if num_dense >= 1: dense_units.append(dense1_units)
+    if num_dense >= 2: dense_units.append(dense2_units)
+    if num_dense >= 3: dense_units.append(dense3_units)
+    dense_layers = dense_units
+
+    # Instancier le modèle
+    cfg = MODELS[model_name]
+    module = importlib.import_module(cfg["module"])
+    ModelClass = getattr(module, cfg["class"])
+    model = ModelClass(num_classes=10, conv_layers=conv_layers, dense_layers=dense_layers)
+
+    # Dummy input selon le modèle
+    if model_name == "SimpleCNN":
+        dummy = torch.zeros(1, 1, 28, 28)
+    else:
+        dummy = torch.zeros(1, 3, 32, 32)
+
+    # Vérification de la taille de sortie des features
+    try:
+        with torch.no_grad():
+            feat = model.features(dummy)
+        if feat.shape[-1] == 0 or feat.shape[-2] == 0:
+            raise ValueError("La configuration choisie réduit la taille de l'image à zéro. Diminuez le nombre de couches convolutionnelles ou la taille du pooling.")
+    except Exception as e:
+        # Créer une image d'erreur temporaire
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmpfile:
+            img = np.ones((100, 400, 3), dtype=np.uint8) * 255
+            import cv2
+            cv2.putText(img, "Erreur: sortie trop petite!", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,0,255), 2)
+            cv2.imwrite(tmpfile.name, img)
+            return tmpfile.name
+
+    # Graphe torchviz
+    model.eval()
+    out = model(dummy)
+    dot = make_dot(out, params=dict(list(model.named_parameters())))
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmpfile:
+        dot.format = "png"
+        dot.render(tmpfile.name, cleanup=True)
+        return tmpfile.name + ".png"
+
 # --- Construction de l'interface Gradio --- #
 with gr.Blocks() as demo:
     gr.Markdown("# ROMEO-DIGITS : Reconnaissance d’images & d’objets")
@@ -241,14 +347,52 @@ with gr.Blocks() as demo:
         dataset.change(update_model_dropdown, inputs=dataset, outputs=model)
 
         with gr.Row():
-            epochs = gr.Slider(1, 10, value=3, step=1, label="Epochs")
+            epochs = gr.Slider(1, 30, value=5, step=1, label="Epochs")
             lr = gr.Slider(0.0001, 0.01, value=0.001, step=0.0001, label="Learning Rate")
-            batch_size = gr.Slider(8, 128, value=32, step=8, label="Batch Size")
+            batch_size = gr.Slider(8, 8192, value=128, step=32, label="Batch Size")
+            num_workers = gr.Slider(0, 8, value=0, step=1, label="Num Workers (DataLoader)")
 
         # Sliders pour proportion train/val/test
         with gr.Row():
-            train_pct = gr.Slider(0.1, 0.9, value=0.8, step=0.05, label="Proportion train (%)", interactive=True)
-            val_pct   = gr.Slider(0.0, 0.5, value=0.1, step=0.05, label="Proportion validation (%)", interactive=True)
+            train_pct = gr.Slider(0.1, 1.0, value=0.8, step=0.05, label="Proportion train (%)", interactive=True)
+            val_pct   = gr.Slider(0.0, 1.0, value=0.1, step=0.05, label="Proportion validation (%)", interactive=True)
+
+        with gr.Row():
+            num_conv       = gr.Slider(1, 5, value=2, step=1, label="Nombre de couches convolutionnelles")
+            conv1_filters  = gr.Slider(8, 256, value=32, step=8, label="Filtres couche 1")
+            conv2_filters  = gr.Slider(8, 256, value=64, step=8, label="Filtres couche 2")
+            conv3_filters  = gr.Slider(8, 256, value=128, step=8, label="Filtres couche 3", visible=False)
+            conv4_filters  = gr.Slider(8, 256, value=128, step=8, label="Filtres couche 4", visible=False)
+            conv5_filters  = gr.Slider(8, 256, value=128, step=8, label="Filtres couche 5", visible=False)
+
+        # Correction ici : afficher les sliders d'indice < num_conv
+        def toggle_conv_sliders(n):
+            return [
+                gr.update(visible=(i < n))
+                for i in range(5)
+            ]
+        num_conv.change(
+            fn=toggle_conv_sliders,
+            inputs=num_conv,
+            outputs=[conv1_filters, conv2_filters, conv3_filters, conv4_filters, conv5_filters]
+        )
+
+        with gr.Row():
+            num_dense      = gr.Slider(1, 3, value=1, step=1, label="Nombre de couches denses")
+            dense1_units   = gr.Slider(16, 2048, value=128, step=16, label="Unités dense 1")
+            dense2_units   = gr.Slider(16, 2048, value=64,  step=16, label="Unités dense 2", visible=False)
+            dense3_units   = gr.Slider(16, 2048, value=32,  step=16, label="Unités dense 3", visible=False)
+
+        def toggle_dense_sliders(n):
+            return [
+                gr.update(visible=(i < n))
+                for i in range(3)
+            ]
+        num_dense.change(
+            fn=toggle_dense_sliders,
+            inputs=num_dense,
+            outputs=[dense1_units, dense2_units, dense3_units]
+        )
 
         train_output = gr.HTML(
             label="Résultat de l'entraînement",
@@ -270,7 +414,11 @@ with gr.Blocks() as demo:
         train_btn = gr.Button("Lancer l'entraînement")
         train_btn.click(
             fn=train_model,
-            inputs=[dataset, model, epochs, lr, batch_size, train_pct, val_pct],
+            inputs=[
+                dataset, model, epochs, lr, batch_size, train_pct, val_pct, num_workers,
+                num_conv, conv1_filters, conv2_filters, conv3_filters, conv4_filters, conv5_filters,
+                num_dense, dense1_units, dense2_units, dense3_units
+            ],
             outputs=[train_output, train_plot, train_plot_acc]
         )
 
@@ -285,6 +433,20 @@ with gr.Blocks() as demo:
         predict_btn = gr.Button("Prédire")
         prediction = gr.HTML(label="Résultat de la prédiction")
         predict_btn.click(fn=predict, inputs=[img_input], outputs=prediction)
+
+        gr.Markdown("---")
+        gr.Markdown("## 📊 Visualiser le schéma du modèle")
+        with gr.Row():
+            model_image = gr.Image(label="Schéma du modèle", type="filepath")
+        plot_btn = gr.Button("Afficher le schéma")
+        plot_btn.click(
+            fn=plot_model,
+            inputs=[
+                model, num_conv, conv1_filters, conv2_filters, conv3_filters, conv4_filters, conv5_filters,
+                num_dense, dense1_units, dense2_units, dense3_units
+            ],
+            outputs=[model_image]
+        )
 
     # --- Onglet 2 : Essayer des modèles pré-entraînés --- #
     with gr.Tab("Essayer des modèles pré-entraînés"):

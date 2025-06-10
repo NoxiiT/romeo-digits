@@ -3,25 +3,41 @@ import torch.nn as nn
 import torch.optim as optim
 
 class CIFARCNN(nn.Module):
-    def __init__(self, num_classes=10):
+    def __init__(self, num_classes=10, conv_layers=None, dense_layers=None):
         super(CIFARCNN, self).__init__()
-        self.features = nn.Sequential(
-            nn.Conv2d(3, 32, 3, padding=1),
-            nn.ReLU(),
-            nn.MaxPool2d(2),
-            nn.Conv2d(32, 64, 3, padding=1),
-            nn.ReLU(),
-            nn.MaxPool2d(2),
-            nn.Conv2d(64, 128, 3, padding=1),
-            nn.ReLU(),
-            nn.MaxPool2d(2)
-        )
-        self.classifier = nn.Sequential(
-            nn.Flatten(),
-            nn.Linear(128*4*4, 256),
-            nn.ReLU(),
-            nn.Linear(256, num_classes)
-        )
+        # Valeurs par défaut strictes demandées
+        if conv_layers is None:
+            conv_layers = [
+                {"out_channels": 32, "kernel_size": 3},
+                {"out_channels": 64, "kernel_size": 3},
+                {"out_channels": 128, "kernel_size": 3}
+            ]
+        if dense_layers is None:
+            dense_layers = [256]
+
+        layers = []
+        in_channels = 3
+        for i, cfg in enumerate(conv_layers):
+            layers.append(nn.Conv2d(in_channels, cfg["out_channels"], cfg.get("kernel_size", 3), padding=1))
+            layers.append(nn.ReLU())
+            layers.append(nn.MaxPool2d(2))
+            in_channels = cfg["out_channels"]
+        self.features = nn.Sequential(*layers)
+
+        dummy = torch.zeros(1, 3, 32, 32)
+        with torch.no_grad():
+            feat_shape = self.features(dummy).shape
+        flat_size = feat_shape[1] * feat_shape[2] * feat_shape[3]
+
+        # Valeur par défaut pour la première couche dense
+        dense = [nn.Flatten()]
+        in_features = flat_size
+        for units in dense_layers:
+            dense.append(nn.Linear(in_features, units))
+            dense.append(nn.ReLU())
+            in_features = units
+        dense.append(nn.Linear(in_features, num_classes))
+        self.classifier = nn.Sequential(*dense)
 
     def forward(self, x):
         x = self.features(x)

@@ -18,7 +18,7 @@ def split_dataset(dataset, train_pct, val_pct):
     return torch.utils.data.random_split(dataset, splits, generator=torch.Generator().manual_seed(42))
 
 
-def get_mnist_dataloaders(batch_size, train_pct=0.8, val_pct=0.1):
+def get_mnist_dataloaders(batch_size, train_pct=0.8, val_pct=0.1, num_workers=0):
     transform = transforms.Compose([
         transforms.Grayscale(num_output_channels=1),
         transforms.Resize((28, 28)),
@@ -35,13 +35,13 @@ def get_mnist_dataloaders(batch_size, train_pct=0.8, val_pct=0.1):
     else:
         train_set = splits[0]
         val_set = None
-    train_loader = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=True)
-    val_loader = torch.utils.data.DataLoader(val_set, batch_size=batch_size, shuffle=False) if val_set else None
-    test_loader = torch.utils.data.DataLoader(test_set, batch_size=batch_size, shuffle=False)
+    train_loader = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=True, num_workers=num_workers)
+    val_loader = torch.utils.data.DataLoader(val_set, batch_size=batch_size, shuffle=False, num_workers=num_workers) if val_set else None
+    test_loader = torch.utils.data.DataLoader(test_set, batch_size=batch_size, shuffle=False, num_workers=num_workers)
     return train_loader, val_loader, test_loader, 10
 
 
-def get_fashionmnist_dataloaders(batch_size, train_pct=0.8, val_pct=0.1):
+def get_fashionmnist_dataloaders(batch_size, train_pct=0.8, val_pct=0.1, num_workers=0):
     transform = transforms.Compose([
         transforms.Grayscale(num_output_channels=1),
         transforms.Resize((28, 28)),
@@ -58,13 +58,13 @@ def get_fashionmnist_dataloaders(batch_size, train_pct=0.8, val_pct=0.1):
     else:
         train_set = splits[0]
         val_set = None
-    train_loader = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=True)
-    val_loader = torch.utils.data.DataLoader(val_set, batch_size=batch_size, shuffle=False) if val_set else None
-    test_loader = torch.utils.data.DataLoader(test_set, batch_size=batch_size, shuffle=False)
+    train_loader = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=True, num_workers=num_workers)
+    val_loader = torch.utils.data.DataLoader(val_set, batch_size=batch_size, shuffle=False, num_workers=num_workers) if val_set else None
+    test_loader = torch.utils.data.DataLoader(test_set, batch_size=batch_size, shuffle=False, num_workers=num_workers)
     return train_loader, val_loader, test_loader, 10
 
 
-def get_cifar10_dataloaders(batch_size, train_pct=0.8, val_pct=0.1):
+def get_cifar10_dataloaders(batch_size, train_pct=0.8, val_pct=0.1, num_workers=0):
     transform = transforms.Compose([
         transforms.Resize((32, 32)),
         transforms.ToTensor(),
@@ -80,7 +80,7 @@ def get_cifar10_dataloaders(batch_size, train_pct=0.8, val_pct=0.1):
     else:
         train_set = splits[0]
         val_set = None
-    train_loader = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=True)
-    val_loader = torch.utils.data.DataLoader(val_set, batch_size=batch_size, shuffle=False) if val_set else None
-    test_loader = torch.utils.data.DataLoader(test_set, batch_size=batch_size, shuffle=False)
+    train_loader = torch.utils.data.DataLoader(train_set, batch_size=batch_size, shuffle=True, num_workers=num_workers)
+    val_loader = torch.utils.data.DataLoader(val_set, batch_size=batch_size, shuffle=False, num_workers=num_workers) if val_set else None
+    test_loader = torch.utils.data.DataLoader(test_set, batch_size=batch_size, shuffle=False, num_workers=num_workers)
     return train_loader, val_loader, test_loader, 10
