@@ -6,6 +6,7 @@ Application interactive pour la reconnaissance d’images et d’objets avec dif
 
 - Entraînement de modèles CNN sur MNIST, Fashion-MNIST, CIFAR-10
 - Test de modèles pré-entraînés (ResNet50, YOLOv5, YOLOv11)
+- Visualisation des réseaux de neurones
 - Interface utilisateur simple avec Gradio
 - Prédiction d’images via upload ou webcam
 
@@ -18,6 +19,8 @@ Application interactive pour la reconnaissance d’images et d’objets avec dif
    ```
 2. Installez les dépendances :
    ```bash
+   # graphviz est nécessaire pour visualiser les modèles
+   sudo apt-get install graphviz
    pip install -r requirements.txt
    ```
 
