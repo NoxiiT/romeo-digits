@@ -54,4 +54,10 @@ romeo_digits/
 ```
 
 ---
+## Preview
+
+![Aperçu de l'entraînement du modèle](images/training.png)
+
+---
+
 Projet CHPS1005
