@@ -526,9 +526,9 @@ with gr.Blocks() as demo:
             lambda frame, conf, iou: yolov11_on_frame(frame, conf, iou),
             inputs=[webcam_stream, conf_slider, iou_slider],
             outputs=output_img,
-            time_limit=15,              # Durée maximale de la vidéo
-            stream_every=0.1,           # Intervalle de streaming (en secondes)
-            concurrency_limit=30        # Limite de concurrence pour éviter les surcharges
+            time_limit=0.1,              # Durée maximale de la vidéo
+            stream_every=0.1,            # Intervalle de streaming (en secondes)
+            concurrency_limit=10         # Limite de concurrence pour éviter les surcharges
         )
 
         # Pour les autres modèles ou image YOLOv11 (upload)

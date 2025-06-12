@@ -13,7 +13,8 @@ try:
     if YOLOV5_AVAILABLE:
         YOLOV5_MODEL = YOLO("yolov5s.pt")
     else:
-        YOLOV5_MODEL = torch.hub.load('ultralytics/yolov5', 'yolov5s', pretrained=True)
+        # Correction : forcer force_reload=True pour torch.hub.load et utiliser le repo complet
+        YOLOV5_MODEL = torch.hub.load('ultralytics/yolov5:v6.2', 'yolov5s', pretrained=True, force_reload=True)
     YOLOV5_LOAD_ERROR = None
 except Exception as e:
     YOLOV5_MODEL = None
