@@ -134,9 +134,12 @@ def train_model(
         colored   = f'<span style="color:#f97316; font-family:monospace;">{filled}{marker}</span>'
         uncolored = f'<span style="color:#777; font-family:monospace;">{rest}</span>'
         bar_html  = f'<span style="font-family:monospace;">[{colored}{uncolored}] {epoch+1}/{epochs}</span>'
-
+        
+        device_str = f"<span style='color:#22c55e;'>GPU</span>" if DEVICE.type != "cpu" else f"<span style='color:#f43f5e;'>CPU</span>"
+        
         result_str = (
             f"{bar_html}<br>"
+            f"Appareil utilisé : {device_str}<br>"
             f"Epoch {epoch+1}/{epochs} — "
             f"(train {train_pct*100:.0f}%, val {val_pct*100:.0f}%)<br>"
             f"Loss : {loss:.4f} | Acc : {acc*100:.2f}%"
@@ -144,8 +147,10 @@ def train_model(
         yield result_str, df, df
 
     # 8️⃣ Message final + courbe complète
+    device_str = f"<span style='color:#22c55e;'>GPU</span>" if DEVICE.type != "cpu" else f"<span style='color:#f43f5e;'>CPU</span>"
     final_str = (
         f"✔️ Entraînement terminé sur {dataset_name} en {epochs} epochs<br>"
+        f"Appareil utilisé : {device_str}<br>"
         f"Loss finale : {losses[-1]:.4f} | Acc finale : {accs[-1]*100:.2f}%"
     )
     df = pd.DataFrame([
