@@ -9,6 +9,7 @@ import cv2
 import numpy as np
 import warnings
 import logging
+import os
 
 # Suppress NNPACK warnings from PyTorch
 warnings.filterwarnings("ignore", message="Could not initialize NNPACK")
@@ -33,6 +34,35 @@ empty_df = pd.DataFrame({
     "accuracy": pd.Series(dtype="float")
 })
 
+# Dossier pour sauvegarder les modèles
+SAVED_MODELS_DIR = "saved_models"
+os.makedirs(SAVED_MODELS_DIR, exist_ok=True)
+
+def get_model_save_path(dataset_name, model_name):
+    # Nom de fichier unique selon dataset et modèle
+    return os.path.join(SAVED_MODELS_DIR, f"{dataset_name}_{model_name}.pt")
+
+def save_model(model, dataset_name, model_name):
+    path = get_model_save_path(dataset_name, model_name)
+    torch.save(model.state_dict(), path)
+
+def load_model(model, dataset_name, model_name):
+    path = get_model_save_path(dataset_name, model_name)
+    if os.path.exists(path):
+        model.load_state_dict(torch.load(path, map_location=DEVICE))
+        return True
+    return False
+
+def list_saved_models():
+    # Retourne la liste des modèles sauvegardés
+    if not os.path.exists(SAVED_MODELS_DIR):
+        return []
+    return [
+        f.replace(".pt", "")
+        for f in os.listdir(SAVED_MODELS_DIR)
+        if f.endswith(".pt")
+    ]
+
 # Méthode pour charger DataLoader dynamiquement
 def load_dataloaders(dataset_name, batch_size, train_pct=0.8, val_pct=0.1, num_workers=0):
     cfg = dATA_LOADERS[dataset_name]
@@ -44,7 +74,8 @@ def load_dataloaders(dataset_name, batch_size, train_pct=0.8, val_pct=0.1, num_w
 def train_model(
     dataset_name, model_name, epochs, lr, batch_size, train_pct, val_pct, num_workers,
     num_conv, conv1_filters, conv2_filters, conv3_filters, conv4_filters, conv5_filters,
-    num_dense, dense1_units, dense2_units, dense3_units
+    num_dense, dense1_units, dense2_units, dense3_units,
+    load_existing_model=False, selected_saved_model=None
 ):
     global MODEL, CLASSES, CURRENT_DATASET
     CURRENT_DATASET = dataset_name
@@ -93,6 +124,16 @@ def train_model(
         conv_layers=conv_layers,
         dense_layers=dense_layers
     )
+
+    # Charger un modèle sauvegardé si demandé
+    if load_existing_model and selected_saved_model:
+        # Extraire dataset/model depuis le nom sauvegardé
+        try:
+            ds, mdl = selected_saved_model.split("_", 1)
+            load_model(MODEL, ds, mdl)
+        except Exception:
+            pass
+
     CLASSES = (
         [str(i) for i in range(num_classes)]
         if dataset_name != "CIFAR-10"
@@ -102,7 +143,7 @@ def train_model(
         ]
     )
 
-    # 6️⃣ Choisir la fonction d’entraînement
+    # 6️⃣ Choisir la fonction d'entraînement
     if model_name == "SimpleCNN":
         from models.simple_cnn import train_simplecnn as train_fn
     else:
@@ -157,7 +198,9 @@ def train_model(
         {"epoch": i+1, "loss": losses[i], "accuracy": accs[i]}
         for i in range(len(losses))
     ])
-    yield final_str, df, df
+    # Sauvegarder le modèle entraîné
+    save_model(MODEL, dataset_name, model_name)
+    yield final_str + "<br>Modèle sauvegardé.", df, df
 
 def predict(image):
     global MODEL, CLASSES, CURRENT_DATASET
@@ -334,7 +377,7 @@ def plot_model(
 
 # --- Construction de l'interface Gradio --- #
 with gr.Blocks() as demo:
-    gr.Markdown("# ROMEO-DIGITS : Reconnaissance d’images & d’objets")
+    gr.Markdown("# ROMEO-DIGITS : Reconnaissance d'images & d'objets")
 
     # --- Onglet 1 : Entraîner son propre modèle --- #
     with gr.Tab("Créer ton propre modèle"):
@@ -352,7 +395,7 @@ with gr.Blocks() as demo:
         dataset.change(update_model_dropdown, inputs=dataset, outputs=model)
 
         with gr.Row():
-            epochs = gr.Slider(1, 30, value=5, step=1, label="Epochs")
+            epochs = gr.Slider(1, 100, value=5, step=1, label="Epochs")
             lr = gr.Slider(0.0001, 0.01, value=0.001, step=0.0001, label="Learning Rate")
             batch_size = gr.Slider(8, 8192, value=128, step=32, label="Batch Size")
             num_workers = gr.Slider(0, 8, value=0, step=1, label="Num Workers (DataLoader)")
@@ -399,6 +442,33 @@ with gr.Blocks() as demo:
             outputs=[dense1_units, dense2_units, dense3_units]
         )
 
+        # Ajout d'une option pour charger un modèle existant
+        with gr.Row():
+            load_existing_model = gr.Checkbox(label="Charger un modèle sauvegardé", value=False)
+            saved_models_dropdown = gr.Dropdown(
+                choices=list_saved_models(),
+                label="Modèles sauvegardés",
+                visible=False
+            )
+
+        def update_saved_models_visibility(checked):
+            return gr.update(visible=checked)
+
+        load_existing_model.change(
+            fn=update_saved_models_visibility,
+            inputs=load_existing_model,
+            outputs=saved_models_dropdown
+        )
+
+        def refresh_saved_models():
+            return gr.update(choices=list_saved_models())
+
+        demo.load(
+            fn=refresh_saved_models,
+            inputs=None,
+            outputs=saved_models_dropdown
+        )
+
         train_output = gr.HTML(
             label="Résultat de l'entraînement",
             min_height=100,
@@ -422,7 +492,8 @@ with gr.Blocks() as demo:
             inputs=[
                 dataset, model, epochs, lr, batch_size, train_pct, val_pct, num_workers,
                 num_conv, conv1_filters, conv2_filters, conv3_filters, conv4_filters, conv5_filters,
-                num_dense, dense1_units, dense2_units, dense3_units
+                num_dense, dense1_units, dense2_units, dense3_units,
+                load_existing_model, saved_models_dropdown
             ],
             outputs=[train_output, train_plot, train_plot_acc]
         )
