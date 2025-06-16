@@ -243,15 +243,24 @@ def classify_pretrained(model_name, image, conf=0.25, iou=0.45):
     else:
         return fn(image), None
 
+# Ajout d'une variable globale pour le modèle YOLOv11
+YOLOV11_MODEL_FN = None
+
+def get_yolov11_model_fn():
+    global YOLOV11_MODEL_FN
+    if YOLOV11_MODEL_FN is None:
+        cfg = MODELS["YOLOv11"]
+        module = importlib.import_module(cfg["module"])
+        YOLOV11_MODEL_FN = getattr(module, cfg["function"])
+    return YOLOV11_MODEL_FN
+
 def stream_yolov11(video):
     """
     Prend un flux vidéo (mp4) depuis la webcam, applique YOLOv11 sur chaque frame,
     et yield la vidéo annotée (mp4) en streaming.
     """
-    from config import MODELS
-    cfg = MODELS["YOLOv11"]
-    module = importlib.import_module(cfg["module"])
-    fn = getattr(module, cfg["function"])
+    # Utilise le modèle déjà chargé
+    fn = get_yolov11_model_fn()
 
     # Ouvre la vidéo d'entrée
     cap = cv2.VideoCapture(video)
@@ -285,6 +294,15 @@ def stream_yolov11(video):
         yield tmpfile.name
     cap.release()
 
+def yolov11_on_frame(frame, conf=0.25, iou=0.45):
+    """
+    Applique YOLOv11 sur une image PIL (frame webcam).
+    """
+    fn = get_yolov11_model_fn()
+    # Redimensionner ici AVANT l'inférence pour accélérer le pipeline
+    frame = frame.resize((640, 384))
+    return fn(frame, conf, iou)
+
 def update_model_dropdown(selected_dataset):
     """
     Si l'utilisateur choisit CIFAR-10, on ne propose que CIFARCNN.
@@ -294,15 +312,6 @@ def update_model_dropdown(selected_dataset):
         return gr.update(choices=["CIFARCNN"], value="CIFARCNN")
     else:
         return gr.update(choices=["SimpleCNN"], value="SimpleCNN")
-
-def yolov11_on_frame(frame, conf=0.25, iou=0.45):
-    """
-    Applique YOLOv11 sur une image PIL (frame webcam).
-    """
-    cfg = MODELS["YOLOv11"]
-    module = importlib.import_module(cfg["module"])
-    fn = getattr(module, cfg["function"])
-    return fn(frame, conf, iou)
 
 def plot_model(
     model_name, num_conv, conv1_filters, conv2_filters, conv3_filters, conv4_filters, conv5_filters,
@@ -554,7 +563,8 @@ with gr.Blocks() as demo:
                 sources="webcam",
                 type="pil",
                 label="Webcam YOLOv11",
-                visible=False
+                visible=False,
+                streaming=True  # Ajout : active le mode streaming pour la webcam
             )
             conf_slider = gr.Slider(
                 0.01, 1.0, value=0.25, step=0.01,
@@ -593,13 +603,15 @@ with gr.Blocks() as demo:
         )
 
         # Pour YOLOv11 webcam : streaming direct frame->frame
+        # Correction ici : on retourne l'image annotée à chaque frame
         webcam_stream.stream(
-            lambda frame, conf, iou: yolov11_on_frame(frame, conf, iou),
+            fn=yolov11_on_frame,
             inputs=[webcam_stream, conf_slider, iou_slider],
             outputs=output_img,
-            time_limit=0.1,              # Durée maximale de la vidéo
-            stream_every=0.1,            # Intervalle de streaming (en secondes)
-            concurrency_limit=10         # Limite de concurrence pour éviter les surcharges
+            # Les paramètres time_limit, stream_every, concurrency_limit restent inchangés
+            time_limit=None,               # <--- PAS de limite de temps, ou mets une grande valeur (ex: 60)
+            stream_every=0.5,                # <--- Plus rapide (30 ms entre chaque frame, ~33 FPS max)
+            concurrency_limit=2
         )
 
         # Pour les autres modèles ou image YOLOv11 (upload)

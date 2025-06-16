@@ -3,7 +3,8 @@ from torchvision import models, transforms
 from PIL import Image
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-MODEL_IMAGENET = models.resnet50(pretrained=True).to(DEVICE)
+MODEL_IMAGENET = models.resnet50(pretrained=True)
+MODEL_IMAGENET = MODEL_IMAGENET.to(DEVICE)  # Ensure model is on DEVICE
 MODEL_IMAGENET.eval()
 
 imagenet_transforms = transforms.Compose([
@@ -21,7 +22,7 @@ with open("imagenet_classes.txt", "r") as f:
 def classify_resnet50(image):
     if image is None:
         return "Aucune image fournie."
-    img_tensor = imagenet_transforms(image).unsqueeze(0).to(DEVICE)
+    img_tensor = imagenet_transforms(image).unsqueeze(0).to(DEVICE)  # Ensure tensor is on DEVICE
     with torch.no_grad():
         outputs = MODEL_IMAGENET(img_tensor)
         probs = torch.nn.functional.softmax(outputs[0], dim=0)
