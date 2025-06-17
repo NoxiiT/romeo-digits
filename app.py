@@ -313,76 +313,148 @@ def update_model_dropdown(selected_dataset):
     else:
         return gr.update(choices=["SimpleCNN"], value="SimpleCNN")
 
-def plot_model(
-    model_name, num_conv, conv1_filters, conv2_filters, conv3_filters, conv4_filters, conv5_filters,
-    num_dense, dense1_units, dense2_units, dense3_units
-):
+def plot_model_simple(conv_layers, dense_layers, input_shape, filename="model_arch"):
+    """
+    conv_layers : list of dict { 'out_channels':int, 'kernel_size':int }
+    dense_layers: list of int (units)
+    input_shape : tuple (C, H, W)
+    """
+    from graphviz import Digraph
     import tempfile
-    from torchviz import make_dot
-    import PIL.Image
 
-    # Sécuriser les valeurs None
-    num_conv = num_conv if num_conv is not None else 1
-    num_dense = num_dense if num_dense is not None else 1
-    conv1_filters = conv1_filters if conv1_filters is not None else 32
-    conv2_filters = conv2_filters if conv2_filters is not None else 64
-    conv3_filters = conv3_filters if conv3_filters is not None else 128
-    conv4_filters = conv4_filters if conv4_filters is not None else 128
-    conv5_filters = conv5_filters if conv5_filters is not None else 128
-    dense1_units = dense1_units if dense1_units is not None else 128
-    dense2_units = dense2_units if dense2_units is not None else 64
-    dense3_units = dense3_units if dense3_units is not None else 32
+    # Couleurs pour les couches convolutionnelles (alternance)
+    conv_colors = ["#93c5fd", "#fca5a5", "#fcd34d", "#6ee7b7", "#c4b5fd"]
 
-    # Construire la config du modèle
-    conv_filters = []
-    if num_conv >= 1: conv_filters.append(conv1_filters)
-    if num_conv >= 2: conv_filters.append(conv2_filters)
-    if num_conv >= 3: conv_filters.append(conv3_filters)
-    if num_conv >= 4: conv_filters.append(conv4_filters)
-    if num_conv >= 5: conv_filters.append(conv5_filters)
-    conv_layers = [{"out_channels": f, "kernel_size": 3} for f in conv_filters]
+    C, H, W = input_shape
 
-    dense_units = []
-    if num_dense >= 1: dense_units.append(dense1_units)
-    if num_dense >= 2: dense_units.append(dense2_units)
-    if num_dense >= 3: dense_units.append(dense3_units)
-    dense_layers = dense_units
+    dot = Digraph(format="png")
+    dot.attr(rankdir="LR", fontsize="12")
 
-    # Instancier le modèle
-    cfg = MODELS[model_name]
-    module = importlib.import_module(cfg["module"])
-    ModelClass = getattr(module, cfg["class"])
-    model = ModelClass(num_classes=10, conv_layers=conv_layers, dense_layers=dense_layers)
+    # 1) Noeud d'entrée
+    dot.node("Input", f"Input\n{C}×{H}×{W}", shape="oval", style="filled", fillcolor="lightgrey")
+    prev = ("Input", C, H, W)
 
-    # Dummy input selon le modèle
-    if model_name == "SimpleCNN":
-        dummy = torch.zeros(1, 1, 28, 28)
-    else:
-        dummy = torch.zeros(1, 3, 32, 32)
+    # 2) Convolutions + ReLU + Pool
+    for idx, cfg in enumerate(conv_layers, start=1):
+        out_ch = cfg["out_channels"]
+        k = cfg["kernel_size"]
+        # Convolution (padding=1, stride=1) conserve H×W
+        conv_H, conv_W = prev[2], prev[3]
+        # Pooling 2×2 → /2
+        pool_H, pool_W = conv_H // 2, conv_W // 2
 
-    # Vérification de la taille de sortie des features
-    try:
-        with torch.no_grad():
-            feat = model.features(dummy)
-        if feat.shape[-1] == 0 or feat.shape[-2] == 0:
-            raise ValueError("La configuration choisie réduit la taille de l'image à zéro. Diminuez le nombre de couches convolutionnelles ou la taille du pooling.")
-    except Exception as e:
-        # Créer une image d'erreur temporaire
-        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmpfile:
-            img = np.ones((100, 400, 3), dtype=np.uint8) * 255
-            import cv2
-            cv2.putText(img, "Erreur: sortie trop petite!", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,0,255), 2)
-            cv2.imwrite(tmpfile.name, img)
-            return tmpfile.name
+        conv_name = f"Conv{idx}"
+        conv_label = f"{conv_name}\n{out_ch}×{k}×{k}\n→ {out_ch}×{conv_H}×{conv_W}"
+        conv_color = conv_colors[(idx - 1) % len(conv_colors)]
+        dot.node(conv_name, conv_label, shape="box", style="filled", fillcolor=conv_color)
+        dot.edge(prev[0], conv_name)
 
-    # Graphe torchviz
-    model.eval()
-    out = model(dummy)
-    dot = make_dot(out, params=dict(list(model.named_parameters())))
-    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmpfile:
-        dot.format = "png"
-        dot.render(tmpfile.name, cleanup=True)
-        return tmpfile.name + ".png"
+        relu = f"ReLU{idx}"
+        dot.node(relu, "ReLU", shape="diamond", style="filled", fillcolor=conv_color)
+        dot.edge(conv_name, relu)
+
+        pool = f"Pool{idx}"
+        pool_label = f"MaxPool2D\n2×2\n→ {out_ch}×{pool_H}×{pool_W}"
+        dot.node(pool, pool_label, shape="box", style="filled", fillcolor=conv_color)
+        dot.edge(relu, pool)
+
+        prev = (pool, out_ch, pool_H, pool_W)
+
+    # 3) Flatten
+    flat_size = prev[1] * prev[2] * prev[3]
+    dot.node("Flatten", f"Flatten\n→ {flat_size}", shape="box", style="filled", fillcolor="#f3e8ff")
+    dot.edge(prev[0], "Flatten")
+    prev = ("Flatten", flat_size)
+
+    # 4) Dense layers
+    dense_colors = ["#fdba74", "#a7f3d0", "#fca5a5"]
+    for j, units in enumerate(dense_layers, start=1):
+        dense_name = f"Dense{j}"
+        dense_color = dense_colors[(j - 1) % len(dense_colors)]
+        dot.node(dense_name, f"{dense_name}\n{units} units", shape="box", style="filled", fillcolor=dense_color)
+        dot.edge(prev[0], dense_name)
+        prev = (dense_name, units)
+
+    # 5) Output
+    out_units = prev[1] if dense_layers else flat_size
+    dot.node("Output", f"Output\n{out_units}\n→ 10", shape="oval", style="filled", fillcolor="lightgrey")
+    dot.edge(prev[0], "Output")
+
+    # 6) Rendu dans un fichier temporaire
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmpf:
+        dot.render(tmpf.name, cleanup=True)
+        return tmpf.name + ".png"
+
+# def plot_model(
+#     model_name, num_conv, conv1_filters, conv2_filters, conv3_filters, conv4_filters, conv5_filters,
+#     num_dense, dense1_units, dense2_units, dense3_units
+# ):
+#     import tempfile
+#     from torchviz import make_dot
+#     import PIL.Image
+
+#     # Sécuriser les valeurs None
+#     num_conv = num_conv if num_conv is not None else 1
+#     num_dense = num_dense if num_dense is not None else 1
+#     conv1_filters = conv1_filters if conv1_filters is not None else 32
+#     conv2_filters = conv2_filters if conv2_filters is not None else 64
+#     conv3_filters = conv3_filters if conv3_filters is not None else 128
+#     conv4_filters = conv4_filters if conv4_filters is not None else 128
+#     conv5_filters = conv5_filters if conv5_filters is not None else 128
+#     dense1_units = dense1_units if dense1_units is not None else 128
+#     dense2_units = dense2_units if dense2_units is not None else 64
+#     dense3_units = dense3_units if dense3_units is not None else 32
+
+#     # Construire la config du modèle
+#     conv_filters = []
+#     if num_conv >= 1: conv_filters.append(conv1_filters)
+#     if num_conv >= 2: conv_filters.append(conv2_filters)
+#     if num_conv >= 3: conv_filters.append(conv3_filters)
+#     if num_conv >= 4: conv_filters.append(conv4_filters)
+#     if num_conv >= 5: conv_filters.append(conv5_filters)
+#     conv_layers = [{"out_channels": f, "kernel_size": 3} for f in conv_filters]
+
+#     dense_units = []
+#     if num_dense >= 1: dense_units.append(dense1_units)
+#     if num_dense >= 2: dense_units.append(dense2_units)
+#     if num_dense >= 3: dense_units.append(dense3_units)
+#     dense_layers = dense_units
+
+#     # Instancier le modèle
+#     cfg = MODELS[model_name]
+#     module = importlib.import_module(cfg["module"])
+#     ModelClass = getattr(module, cfg["class"])
+#     model = ModelClass(num_classes=10, conv_layers=conv_layers, dense_layers=dense_layers)
+
+#     # Dummy input selon le modèle
+#     if model_name == "SimpleCNN":
+#         dummy = torch.zeros(1, 1, 28, 28)
+#     else:
+#         dummy = torch.zeros(1, 3, 32, 32)
+
+#     # Vérification de la taille de sortie des features
+#     try:
+#         with torch.no_grad():
+#             feat = model.features(dummy)
+#         if feat.shape[-1] == 0 or feat.shape[-2] == 0:
+#             raise ValueError("La configuration choisie réduit la taille de l'image à zéro. Diminuez le nombre de couches convolutionnelles ou la taille du pooling.")
+#     except Exception as e:
+#         # Créer une image d'erreur temporaire
+#         with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmpfile:
+#             img = np.ones((100, 400, 3), dtype=np.uint8) * 255
+#             import cv2
+#             cv2.putText(img, "Erreur: sortie trop petite!", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,0,255), 2)
+#             cv2.imwrite(tmpfile.name, img)
+#             return tmpfile.name
+
+#     # Graphe torchviz
+#     model.eval()
+#     out = model(dummy)
+#     dot = make_dot(out, params=dict(model.named_parameters()))
+#     with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmpfile:
+#         dot.format = "png"
+#         dot.render(tmpfile.name, cleanup=True)
+#         return tmpfile.name + ".png"
 
 # --- Construction de l'interface Gradio --- #
 with gr.Blocks() as demo:
@@ -521,16 +593,44 @@ with gr.Blocks() as demo:
 
         gr.Markdown("---")
         gr.Markdown("## 📊 Visualiser le schéma du modèle")
+        # with gr.Row():
+        #     model_image = gr.Image(label="Schéma du modèle", type="filepath")
+        # plot_btn = gr.Button("Afficher le schéma")
+        # plot_btn.click(
+        #     fn=plot_model,
+        #     inputs=[
+        #         model, num_conv, conv1_filters, conv2_filters, conv3_filters, conv4_filters, conv5_filters,
+        #         num_dense, dense1_units, dense2_units, dense3_units
+        #     ],
+        #     outputs=[model_image]
+        # )
+        
+        # gr.Markdown("### Schéma simple du modèle")
         with gr.Row():
-            model_image = gr.Image(label="Schéma du modèle", type="filepath")
-        plot_btn = gr.Button("Afficher le schéma")
-        plot_btn.click(
-            fn=plot_model,
+            simple_model_image = gr.Image(label="Schéma simple du modèle", type="filepath")
+        simple_plot_btn = gr.Button("Afficher le schéma simple")
+        simple_plot_btn.click(
+            fn=lambda num_conv, conv1_filters, conv2_filters, conv3_filters, conv4_filters, conv5_filters,
+                   num_dense, dense1_units, dense2_units, dense3_units, model: plot_model_simple(
+                       conv_layers=[
+                           {"out_channels": conv1_filters, "kernel_size": 3},
+                           *([{"out_channels": conv2_filters, "kernel_size": 3}] if num_conv >= 2 else []),
+                           *([{"out_channels": conv3_filters, "kernel_size": 3}] if num_conv >= 3 else []),
+                           *([{"out_channels": conv4_filters, "kernel_size": 3}] if num_conv >= 4 else []),
+                           *([{"out_channels": conv5_filters, "kernel_size": 3}] if num_conv >= 5 else []),
+                       ],
+                       dense_layers=[
+                           dense1_units,
+                           *( [dense2_units] if num_dense >= 2 else [] ),
+                           *( [dense3_units] if num_dense >= 3 else [] ),
+                       ],
+                       input_shape=(1, 28, 28) if model == "SimpleCNN" else (3, 32, 32)
+                   ),
             inputs=[
-                model, num_conv, conv1_filters, conv2_filters, conv3_filters, conv4_filters, conv5_filters,
-                num_dense, dense1_units, dense2_units, dense3_units
+                num_conv, conv1_filters, conv2_filters, conv3_filters, conv4_filters, conv5_filters,
+                num_dense, dense1_units, dense2_units, dense3_units, model
             ],
-            outputs=[model_image]
+            outputs=[simple_model_image]
         )
 
     # --- Onglet 2 : Essayer des modèles pré-entraînés --- #
